@@ -44,41 +44,19 @@ static std::string check_forbidden_chars(const std::string &str)
 }
 
 /*
-* @brief convert a mac address to hex notation 
+* @brief Calculate the number of bytes needed to represent a given integer  
 * 
-* @param[in]  str String mac address
-* @return - none
+* @param[in] val An integer
+* @return Number of bytes needed to represent a given integer
 */
-static void convert_mac_address_to_hex_notation(std::string &str)
+static int number_of_bytes(int val)
 {
-    str.erase(std::remove(str.begin(), str.end(), ':'), str.end());
-    str = "0x" + str;
-}
-
-/*
-* @brief Checks that the given string represents a mac address 
-* 
-* @param[in]  str String mac address
-* @return - true if string represents a mac address, else false.
-*/
-static bool validate_mac_address(const std::string &str)
-{
-    int i                = 0;
-    int separators_count = 0;
-    for (auto &c : str) {
-        if (isxdigit(c)) {
-            i++;
-        } else if (c == ':') {
-            if (i == 0 || i / 2 - 1 != separators_count)
-                break;
-            ++separators_count;
-        } else {
-            separators_count = -1;
-        }
+    int size = 0;
+    while (val > 0) {
+        val = val >> 8;
+        size++;
     }
-    if (i == 12 && separators_count == 5)
-        return true;
-    return false;
+    return size;
 }
 
 /**
@@ -112,6 +90,50 @@ static bool validate_hex_notation(const std::string &str, uint8_t expected_octet
         return false;
     }
 
+    return true;
+}
+
+/**
+ * @brief Checks that the given string is in binary notation
+ * 
+ * @param[in] str String to check binary notation.
+ * @return true if string is in valid binary notation, else false.
+ */
+static bool validate_binary_notation(const std::string &str)
+{
+    // Each value must start with 0b
+    if (str.substr(0, 2) != "0b") {
+        return false;
+    }
+
+    if ((str.size() - 2) % 8 != 0) {
+        return false;
+    }
+
+    // Check if string contains not only 0 and 1
+    if (str.find_first_not_of("01", 2) != std::string::npos) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief Checks that the given string is in decimal notation
+ * 
+ * @param[in] str String to check decimal notation.
+ * @return true if string is in valid decimal notation, else false.
+ */
+static bool validate_decimal_notation(const std::string &str)
+{
+    // Each value must start with 0b
+    if (str.substr(0, 2) != "0d") {
+        return false;
+    }
+
+    // Check if string has non-decimal character
+    if (str.find_first_not_of("0123456789", 2) != std::string::npos) {
+        return false;
+    }
     return true;
 }
 
@@ -799,7 +821,6 @@ bool wfa_ca::get_send_1905_1_tlv_hex_list(std::list<tlv_hex_t> &tlv_hex_list,
     bool skip                                         = false;
     bool finish                                       = false;
     static const std::vector<std::string> tlv_members = {"tlv_type", "tlv_length", "tlv_value"};
-    bool join                                         = false;
 
     do {
         tlv_hex_t tlv_hex;
@@ -850,26 +871,12 @@ bool wfa_ca::get_send_1905_1_tlv_hex_list(std::list<tlv_hex_t> &tlv_hex_list,
                 // Validate hex notation on list of values separated by space
                 auto values = string_utils::str_split(it->second, ' ');
                 for (auto &value : values) {
-                    if (!validate_hex_notation(value)) {
-                        if (validate_mac_address(value)) {
-                            convert_mac_address_to_hex_notation(value);
-                            join = true;
-                        } else {
-                            err_string =
-                                "param name '" + lookup_str + "' has invalid hex notation value";
-                            return false;
-                        }
+                    if (!(validate_hex_notation(value) || net::network_utils::is_valid_mac(value) ||
+                          validate_binary_notation(value) || validate_decimal_notation(value))) {
+                        err_string =
+                            "param name '" + lookup_str + "' has value with invalid format";
+                        return false;
                     }
-                }
-                if (join) {
-                    std::string s;
-                    for (auto &value : values) {
-                        s.append(value);
-                        s.append(" ");
-                    }
-                    s.substr(0, s.size() - 1);
-                    it->second = s;
-                    join       = false;
                 }
             } else {
                 LOG(ERROR) << "Illegal tlv_member_idx value: " << int(tlv_member_idx);
@@ -896,6 +903,70 @@ bool wfa_ca::get_send_1905_1_tlv_hex_list(std::list<tlv_hex_t> &tlv_hex_list,
     LOG(ERROR) << "Reached stop condition";
     err_string = err_internal;
     return false;
+}
+
+/**
+ * @brief Writes a decimal string into the class buffer.
+ * 
+ * @param[in] value Decimal string.
+ * @param[out] length Length of current tlv.
+ * @return false if length smaller than data, else true.
+ */
+bool tlvPrefilledData::add_tlv_value_decimal_string(const std::string &value, uint16_t &length)
+{
+    int i_dec        = std::stoi(value.substr(2, value.length()));
+    int num_of_bytes = number_of_bytes(i_dec);
+    std::string s    = string_utils::int_to_hex_string(i_dec, num_of_bytes);
+
+    for (size_t char_idx = 0; char_idx < s.size(); char_idx += 2) {
+        if (length == 0) {
+            return false;
+        }
+        *m_buff_ptr__ = std::stoi(s.substr(char_idx, 2), nullptr, 16);
+        m_buff_ptr__++;
+        length--;
+    }
+    return true;
+}
+
+/**
+ * @brief Writes a binary string into the class buffer.
+ * 
+ * @param[in] value Binary string.
+ * @param[out] length Length of current tlv.
+ * @return false if length smaller than data, else true.
+ */
+bool tlvPrefilledData::add_tlv_value_binary_string(const std::string &value, uint16_t &length)
+{
+    for (size_t char_idx = 2; char_idx < value.size(); char_idx += 8) {
+        if (length == 0) {
+            return false;
+        }
+        *m_buff_ptr__ = std::stoi(value.substr(char_idx, 8), nullptr, 2);
+        m_buff_ptr__++;
+        length--;
+    }
+    return true;
+}
+
+/**
+ * @brief Writes a mac string into the class buffer.
+ * 
+ * @param[in] value mac address.
+ * @param[out] length of current tlv.
+ * @return false if length smaller than data, else true.
+ */
+bool tlvPrefilledData::add_tlv_value_mac(const std::string &value, uint16_t &length)
+{
+    for (size_t char_idx = 0; char_idx < value.size(); char_idx += 3) {
+        if (length == 0) {
+            return false;
+        }
+        *m_buff_ptr__ = std::stoi(value.substr(char_idx, 2), nullptr, 16);
+        m_buff_ptr__++;
+        length--;
+    }
+    return true;
 }
 
 /**
@@ -929,6 +1000,28 @@ bool tlvPrefilledData::add_tlvs_from_list(std::list<wfa_ca::tlv_hex_t> &tlv_hex_
 
         auto values = string_utils::str_split(*tlv.value, ' ');
         for (auto value : values) {
+            //Do conversion if needed
+            if (value[1] != 'x') {
+                if (value[2] == ':') {
+                    if (!add_tlv_value_mac(value, length)) {
+                        err_string = "length smaller than data";
+                        return false;
+                    }
+                    continue;
+                } else if (value[1] == 'd') {
+                    if (!add_tlv_value_decimal_string(value, length)) {
+                        err_string = "length smaller than data";
+                        return false;
+                    }
+                    continue;
+                } else if (value[1] == 'b') {
+                    if (!add_tlv_value_binary_string(value, length)) {
+                        err_string = "length smaller than data";
+                        return false;
+                    }
+                    continue;
+                }
+            }
             // iterate every to chars (1 octet) and write it to buffer
             // start with char_idx = 2 to skip "0x"
             for (size_t char_idx = 2; char_idx < value.size(); char_idx += 2) {
