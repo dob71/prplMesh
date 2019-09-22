@@ -43,6 +43,44 @@ static std::string check_forbidden_chars(const std::string &str)
     return forbidden_chars_found;
 }
 
+/*
+* @brief convert a mac address to hex notation 
+* 
+* @param[in]  str String mac address
+* @return - none
+*/
+static void convert_mac_address_to_hex_notation(std::string &str)
+{
+    str.erase(std::remove(str.begin(), str.end(), ':'), str.end());
+    str = "0x" + str;
+}
+
+/*
+* @brief Checks that the given string represents a mac address 
+* 
+* @param[in]  str String mac address
+* @return - true if string represents a mac address, else false.
+*/
+static bool validate_mac_address(const std::string &str)
+{
+    int i                = 0;
+    int separators_count = 0;
+    for (auto &c : str) {
+        if (isxdigit(c)) {
+            i++;
+        } else if (c == ':') {
+            if (i == 0 || i / 2 - 1 != separators_count)
+                break;
+            ++separators_count;
+        } else {
+            separators_count = -1;
+        }
+    }
+    if (i == 12 && separators_count == 5)
+        return true;
+    return false;
+}
+
 /**
  * @brief Checks that the given string is in a hex notation
  * 
@@ -761,6 +799,7 @@ bool wfa_ca::get_send_1905_1_tlv_hex_list(std::list<tlv_hex_t> &tlv_hex_list,
     bool skip                                         = false;
     bool finish                                       = false;
     static const std::vector<std::string> tlv_members = {"tlv_type", "tlv_length", "tlv_value"};
+    bool join                                         = false;
 
     do {
         tlv_hex_t tlv_hex;
@@ -810,12 +849,27 @@ bool wfa_ca::get_send_1905_1_tlv_hex_list(std::list<tlv_hex_t> &tlv_hex_list,
 
                 // Validate hex notation on list of values separated by space
                 auto values = string_utils::str_split(it->second, ' ');
-                for (const auto &value : values) {
+                for (auto &value : values) {
                     if (!validate_hex_notation(value)) {
-                        err_string =
-                            "param name '" + lookup_str + "' has invalid hex notation value";
-                        return false;
+                        if (validate_mac_address(value)) {
+                            convert_mac_address_to_hex_notation(value);
+                            join = true;
+                        } else {
+                            err_string =
+                                "param name '" + lookup_str + "' has invalid hex notation value";
+                            return false;
+                        }
                     }
+                }
+                if (join) {
+                    std::string s;
+                    for (auto &value : values) {
+                        s.append(value);
+                        s.append(" ");
+                    }
+                    s.substr(0, s.size() - 1);
+                    it->second = s;
+                    join       = false;
                 }
             } else {
                 LOG(ERROR) << "Illegal tlv_member_idx value: " << int(tlv_member_idx);
