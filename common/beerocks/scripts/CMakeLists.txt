@@ -2,8 +2,11 @@
 set(PS_CMD "ps -aux")
 set(AWK_CMD "awk '{print $2}'")
 
-# Platform specific overrides
+# Platform specific overrides (need to make it "if busybox")
 if (TARGET_PLATFORM STREQUAL "turris-omnia")
+    set(PS_CMD "ps")
+    set(AWK_CMD "awk '{print $1}'")
+elseif (TARGET_PLATFORM STREQUAL "glinet-b1300")
     set(PS_CMD "ps")
     set(AWK_CMD "awk '{print $1}'")
 endif()
